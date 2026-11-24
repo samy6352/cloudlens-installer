@@ -8,7 +8,7 @@ irm https://raw.githubusercontent.com/samy6352/cloudlens-installer/main/install-
 ./install-customer.ps1 -Location <region> -SubscriptionId <hosting-subscription-id>
 ```
 
-The script downloads release **v2026.11.24-dev4**, verifies its SHA-256 against `SHA256SUMS.txt`, then runs the guided installer.
+The script downloads release **v2026.11.24-dev5**, verifies its SHA-256 against `SHA256SUMS.txt`, then runs the guided installer.
 Existing VNet: choose it when asked, enter the VNet name and pick the three subnets from the list.
 
 Requires Owner (or Contributor + User Access Administrator) on the hosting subscription and permission to assign roles on the monitored subscriptions.
