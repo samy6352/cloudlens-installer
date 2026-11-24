@@ -6,7 +6,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')]
-    [string]$Version = '2026.11.24-dev1',
+    [string]$Version = '2026.11.24-dev2',
     # GitHub repository whose releases hold the verified source ZIP and SHA256SUMS.txt.
     [ValidatePattern('^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')]
     [string]$Repository = 'samy6352/cloudlens-installer',
@@ -55,17 +55,52 @@ $ErrorActionPreference = 'Stop'
 if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
     throw "CloudLens setup requires PowerShell 7 in FullLanguage mode. This session is $($ExecutionContext.SessionState.LanguageMode). Use an organisation-approved environment, such as approved Azure Cloud Shell (PowerShell), or ask your administrator for an approved installation path."
 }
+$script:UiFancy = ($env:CLOUDLENS_FANCY -eq '1') -or
+    (-not [Console]::IsOutputRedirected -and -not $env:NO_COLOR -and $env:CLOUDLENS_PLAIN -ne '1')
+if ($script:UiFancy) { try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { } }
+function Get-UiWidth { try { return [math]::Max(60, [math]::Min(96, [Console]::WindowWidth - 4)) } catch { return 80 } }
+function Get-UiBar([int]$Percent, [int]$Width = 30) {
+    $filled = [math]::Max(0, [math]::Min($Width, [int][math]::Round($Width * $Percent / 100)))
+    return ('█' * $filled) + ('░' * ($Width - $filled))
+}
+function Show-UiBanner([string]$Subtitle) {
+    $inner = (Get-UiWidth) - 2
+    $rows = @('', '   ☁  C L O U D L E N S', '   See. Analyze. Optimize.', '', "   $Subtitle", '')
+    Write-Host ''
+    Write-Host ('  ╭' + ('─' * $inner) + '╮') -ForegroundColor Cyan
+    foreach ($row in $rows) {
+        Write-Host '  │' -ForegroundColor Cyan -NoNewline
+        Write-Host (' ' + $row.PadRight($inner - 1)) -ForegroundColor $(if ($row -like '*C L O U D*') { 'White' } else { 'Cyan' }) -NoNewline
+        Write-Host '│' -ForegroundColor Cyan
+    }
+    Write-Host ('  ╰' + ('─' * $inner) + '╯') -ForegroundColor Cyan
+}
 function Write-SetupStage([int]$Number, [string]$Title, [string]$Detail) {
+    if ($script:UiFancy) {
+        $w = Get-UiWidth
+        $percent = [int][math]::Floor(($Number - 1) * 100 / [math]::Max(1, $stageCount))
+        Write-Host ''
+        Write-Host "  ▸ Stage $Number of $stageCount  $Title" -ForegroundColor White
+        Write-Host ('  ▕' + (Get-UiBar $percent ([math]::Min(40, $w - 14))) + ('▏ {0,3}%' -f $percent)) -ForegroundColor Cyan
+        Write-Host "    $Detail" -ForegroundColor DarkGray
+        return
+    }
     Write-Host "`n[$Number/$stageCount] $Title" -ForegroundColor Cyan
     Write-Host "      $Detail"
 }
 
 $mode = if ($Preview) { 'Preview only' } elseif ($Approve) { 'Unattended' } else { 'Guided' }
 $stageCount = if ($Preview) { 5 } else { 6 }
-Write-Host "`nCloudLens Setup | $Version | $mode" -ForegroundColor Cyan
 $journey = 'Verify source > Configure > Check readiness > Preview > Review'
 if (-not $Preview) { $journey += ' > Install' }
-Write-Host $journey
+if ($script:UiFancy) {
+    Show-UiBanner "Customer installer · $Version · $mode"
+    Write-Host "  $($journey -replace ' > ', '  ›  ')" -ForegroundColor DarkGray
+    $env:CLOUDLENS_BANNER_SHOWN = '1'
+} else {
+    Write-Host "`nCloudLens Setup | $Version | $mode" -ForegroundColor Cyan
+    Write-Host $journey
+}
 if ($SourceZip -and $SourceSha256 -notmatch '^[a-fA-F0-9]{64}$') {
     throw '-SourceZip requires the separately supplied -SourceSha256 (64 hexadecimal characters).'
 }
