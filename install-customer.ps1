@@ -6,7 +6,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')]
-    [string]$Version = '2026.11.24-dev3',
+    [string]$Version = '2026.11.24-dev4',
     # GitHub repository whose releases hold the verified source ZIP and SHA256SUMS.txt.
     [ValidatePattern('^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')]
     [string]$Repository = 'samy6352/cloudlens-installer',
@@ -34,6 +34,17 @@ param(
     [int]$InitialHistoryMonths = 1,
     [string]$NamePrefix = '',
     [string]$NameSuffix = '',
+    # Exact resource names (your naming convention). Empty keeps the derived name.
+    [string]$WebAppName = '',
+    [string]$PostgresServerName = '',
+    [string]$DatabaseName = '',
+    [string]$ManagedIdentityName = '',
+    [string]$FoundryAccountName = '',
+    [string]$AppServicePlanName = '',
+    [string]$LogAnalyticsName = '',
+    [string]$AppInsightsName = '',
+    [string]$StorageAccountName = '',
+    [string]$StorageContainerName = '',
     # Existing single-tenant Entra app registration client ID to reuse for sign-in.
     [string]$EntraClientId = '',
     # Sign-in bootstrap choice for deployment.
@@ -527,14 +538,35 @@ try {
             break
         }
     }
-    if (-not $NamePrefix -and -not $NameSuffix -and $interactive) {
+    $customNameKeys = @('WebAppName', 'PostgresServerName', 'DatabaseName', 'ManagedIdentityName', 'FoundryAccountName', 'AppServicePlanName', 'LogAnalyticsName', 'AppInsightsName', 'StorageAccountName', 'StorageContainerName')
+    $hasCustomNames = [bool](@($customNameKeys | Where-Object { (Get-Variable -Name $_ -ValueOnly) }).Count)
+    if (-not $NamePrefix -and -not $NameSuffix -and -not $hasCustomNames -and $interactive) {
         $nameMode = Select-InstallOption 'Resource naming mode:' @(
             @{ Label = 'Use generated default names'; Value = 'generated' }
             @{ Label = 'Set custom prefix/suffix'; Value = 'custom' }
-        ) 1 'Generated names minimise naming collisions. Use a custom prefix and suffix when your organisation requires a naming convention.'
+            @{ Label = 'Enter exact names for each resource (your naming convention)'; Value = 'exact' }
+        ) 1 'Generated names minimise naming collisions. Use a prefix and suffix, or exact names when your organisation requires a naming convention.'
         if ($nameMode -eq 'custom') {
             $NamePrefix = (Read-Host 'Name prefix (2-12 lowercase letters/digits/hyphens)').Trim().ToLowerInvariant()
             $NameSuffix = (Read-Host 'Name suffix (1-10 lowercase letters/digits/hyphens)').Trim().ToLowerInvariant()
+        } elseif ($nameMode -eq 'exact') {
+            Write-Host 'Press Enter to keep the generated name for any resource.'
+            foreach ($entry in @(
+                @{ Key = 'WebAppName'; Prompt = 'Web app name (e.g. app-cloudlens-001)' }
+                @{ Key = 'PostgresServerName'; Prompt = 'PostgreSQL server name (lower case, e.g. pg-cloudlens-apea-001)' }
+                @{ Key = 'DatabaseName'; Prompt = 'Database name (e.g. db-cloudlens-001)' }
+                @{ Key = 'ManagedIdentityName'; Prompt = 'Managed identity name (e.g. id-cloudlens-001)' }
+                @{ Key = 'FoundryAccountName'; Prompt = 'AI Foundry account name (e.g. aif-cloudlens-apea-001)' }
+                @{ Key = 'StorageAccountName'; Prompt = 'Storage account name (3-24 lower-case letters/digits, e.g. stcloudlensapea001)' }
+                @{ Key = 'StorageContainerName'; Prompt = 'Storage container name (e.g. cloudlens-documents)' }
+                @{ Key = 'AppServicePlanName'; Prompt = 'App Service plan name' }
+                @{ Key = 'LogAnalyticsName'; Prompt = 'Log Analytics workspace name' }
+                @{ Key = 'AppInsightsName'; Prompt = 'Application Insights name' }
+            )) {
+                $answer = (Read-Host $entry.Prompt).Trim()
+                if ($answer) { Set-Variable -Name $entry.Key -Value $answer }
+            }
+            $hasCustomNames = [bool](@($customNameKeys | Where-Object { (Get-Variable -Name $_ -ValueOnly) }).Count)
         }
     }
     if ($NamePrefix -and $NamePrefix -notmatch $PrefixRule) { throw 'NamePrefix must be 2-12 lowercase letters, digits or hyphens, not starting or ending with a hyphen.' }
@@ -665,6 +697,12 @@ try {
     if ($installerSupportsNoToolInstall -and $NoToolInstall) { $options.NoToolInstall = $true }
     if ($NamePrefix) { $options.NamePrefix = $NamePrefix }
     if ($NameSuffix) { $options.NameSuffix = $NameSuffix }
+    foreach ($key in $customNameKeys) {
+        $value = Get-Variable -Name $key -ValueOnly
+        if (-not $value) { continue }
+        if (-not (Get-Command -Name $installer).Parameters.ContainsKey($key)) { throw "This release does not support custom resource name parameter $key." }
+        $options[$key] = $value
+    }
     Write-SetupStage 4 'Preview Azure changes' 'Review the ARM What-If output. It does not show every Entra, access or export operation.'
     while ($true) {
         try {
@@ -698,13 +736,17 @@ try {
         'VNet range'           = $(if ($existingNetworkOptions.Count) { "Existing subnets in $(($ExistingAppSubnetId -split '/subnets/')[0] -split '/')[-1]" } elseif ($VnetAddressPrefix) { $VnetAddressPrefix } else { 'Release default (review What-If)' })
         'Sizing'               = "$Size (App Service $planSku / PostgreSQL $pgSku)"
         'First import'         = "$InitialHistoryMonths month(s)"
-        'Naming'               = $(if ($NamePrefix) { "$NamePrefix / $NameSuffix (prefix / suffix)" } else { 'Generated' })
+        'Naming'               = $(if ($hasCustomNames) { 'Exact names (listed below)' } elseif ($NamePrefix) { "$NamePrefix / $NameSuffix (prefix / suffix)" } else { 'Generated' })
         'Runtime access'       = "$RuntimeAccessMode (requested)"
         'Entra sign-in app'    = $(if ($EntraClientId) { "$SignInAppMode ($EntraClientId)" } else { $SignInAppMode })
         'Recovery folder'      = $source
     }
     foreach ($item in $plan.GetEnumerator()) {
         Write-Host ('  {0,-21} {1}' -f ($item.Key + ':'), $item.Value)
+    }
+    foreach ($key in $customNameKeys) {
+        $value = Get-Variable -Name $key -ValueOnly
+        if ($value) { Write-Host ('    {0,-19} {1}' -f ($key -creplace '([a-z])([A-Z])', '$1 $2'), $value) }
     }
     if ($Preview) {
         Write-Host "`nPreview complete. No Azure resources were provisioned. Review the warnings and unsupported changes before planning an install." -ForegroundColor Green
