@@ -6,7 +6,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')]
-    [string]$Version = '2026.11.24-dev2',
+    [string]$Version = '2026.11.24-dev3',
     # GitHub repository whose releases hold the verified source ZIP and SHA256SUMS.txt.
     [ValidatePattern('^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')]
     [string]$Repository = 'samy6352/cloudlens-installer',
@@ -48,6 +48,9 @@ param(
     # Skip the final interactive approval prompt (required for non-interactive runs).
     [switch]$Approve,
     [switch]$Resume,
+    # Deploy into a resource group that already exists (for example one that also holds your VNet).
+    # The group must be in -Location and must not already contain a CloudLens installation.
+    [switch]$UseExistingResourceGroup,
     [switch]$Preview,
     [switch]$NoToolInstall
 )
@@ -441,11 +444,20 @@ try {
     if (-not $ResourceGroup) {
         $defaultResourceGroup = ('rg-cloudlens-{0}' -f (Get-Date -Format 'yyyyMMdd-HHmm')).ToLowerInvariant()
         if ($interactive) {
-            $rgMode = Select-InstallOption 'Resource group name:' @(
-                @{ Label = "Use recommended new name ($defaultResourceGroup)"; Value = 'recommended' }
-                @{ Label = 'Enter a custom new name'; Value = 'custom' }
-            ) 1 'A dedicated resource group keeps recovery separate from other workloads. To resume an existing CloudLens stack, reuse its original settings with -Resume.'
-            if ($rgMode -eq 'custom') {
+            $rgMode = Select-InstallOption 'Resource group:' @(
+                @{ Label = "Create a new resource group ($defaultResourceGroup)"; Value = 'recommended' }
+                @{ Label = 'Create a new resource group with a custom name'; Value = 'custom' }
+                @{ Label = 'Use an existing resource group'; Value = 'existing' }
+            ) 1 'A dedicated new resource group keeps recovery separate from other workloads. An existing group is updated incrementally and must be in the app region and hold no CloudLens installation. To resume a CloudLens stack, reuse its original settings with -Resume.'
+            if ($rgMode -eq 'existing') {
+                $groups = @(Invoke-BootstrapAz @('group', 'list', '--subscription', $SubscriptionId, '--query',
+                    '[].{name:name,location:location}') | Where-Object { $_ } | Sort-Object name)
+                $usable = @($groups | Where-Object { $_.location -ieq $Location })
+                if (-not $usable.Count) { throw "No resource group exists in $Location in this subscription. Create one, or choose a new resource group." }
+                $pickGroup = Select-InstallOption "Existing resource groups in ${Location}:" @($usable | ForEach-Object { @{ Label = $_.name; Value = $_.name } }) 1 'Only groups in the app region are listed; a resource group cannot move region.'
+                $ResourceGroup = [string]$pickGroup
+                $UseExistingResourceGroup = $true
+            } elseif ($rgMode -eq 'custom') {
                 $input = (Read-Host "NEW dedicated CloudLens resource group name [$defaultResourceGroup]").Trim()
                 $ResourceGroup = if ($input) { $input } else { $defaultResourceGroup }
             } else {
@@ -553,7 +565,19 @@ try {
     }
     $exists = Invoke-BootstrapAz @('group', 'exists', '--name', $ResourceGroup, '--subscription', $SubscriptionId)
     if ($exists -isnot [bool]) { throw 'Resource group existence could not be verified.' }
-    if ($exists -and -not $Resume) { throw "Resource group '$ResourceGroup' exists. Use a new name, or -Resume only for this same CloudLens installation." }
+    if ($exists -and -not $Resume -and -not $UseExistingResourceGroup) { throw "Resource group '$ResourceGroup' exists. Use a new name, add -UseExistingResourceGroup to deploy into it, or -Resume only for this same CloudLens installation." }
+    if ($UseExistingResourceGroup -and -not $Resume) {
+        if (-not $exists) { throw "Resource group '$ResourceGroup' does not exist, so -UseExistingResourceGroup cannot be used. Remove it to create the group." }
+        $group = Invoke-BootstrapAz @('group', 'show', '--name', $ResourceGroup, '--subscription', $SubscriptionId, '--query', '{location:location}')
+        if ($group.location -ine $Location) {
+            throw "Resource group '$ResourceGroup' is in $($group.location), but -Location is $Location. A resource group cannot move region; use -Location $($group.location)."
+        }
+        $installed = @(Invoke-BootstrapAz @('webapp', 'list', '--resource-group', $ResourceGroup, '--subscription', $SubscriptionId,
+            '--query', "[?tags.application=='CloudLens'].name") | Where-Object { $_ })
+        if ($installed.Count) {
+            throw "Resource group '$ResourceGroup' already holds a CloudLens app ($($installed -join ', ')). Use -Resume to upgrade that installation."
+        }
+    }
     $previewTarget = "$($account.name) ($SubscriptionId) / $ResourceGroup"
     Write-SetupStage 3 'Check Azure readiness' "Target: $previewTarget. Azure will check regions, capacity and access."
     $global:LASTEXITCODE = 0
@@ -664,7 +688,7 @@ try {
         elseif ($costScopeSubscriptions[0] -ieq $SubscriptionId) { 'Hosting subscription only' }
         else { "Subscription: $($costScopeSubscriptions[0])" }
     $plan = [ordered]@{
-        'Target'               = $(if ($Resume) { 'Resume existing installation' } else { 'New installation' })
+        'Target'               = $(if ($Resume) { 'Resume existing installation' } elseif ($UseExistingResourceGroup) { 'New installation in an existing resource group' } else { 'New installation' })
         'Hosting subscription' = "$($account.name) ($SubscriptionId)"
         'Tenant'               = $account.tenantId
         'Resource group'       = $ResourceGroup
