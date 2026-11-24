@@ -6,7 +6,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')]
-    [string]$Version = '2026.11.24-dev4',
+    [string]$Version = '2026.11.24-dev5',
     # GitHub repository whose releases hold the verified source ZIP and SHA256SUMS.txt.
     [ValidatePattern('^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')]
     [string]$Repository = 'samy6352/cloudlens-installer',
