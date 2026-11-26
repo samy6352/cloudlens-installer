@@ -7,12 +7,14 @@
 # identity write access to the CloudLens storage account. The runtime app is deliberately unable
 # to do step 2, which is why an administrator does it once here. Safe to re-run.
 
-# ===================== EDIT THESE =====================
-$ResourceGroup = 'ewb-cl'              # resource group of the CloudLens web app
-$AppName       = 'cloudlens-du56j'     # CloudLens web app name
-$Subscriptions = @(                    # subscription IDs to add
-    '00000000-0000-0000-0000-000000000000'
+# ===================== PARAMETERS =====================
+# Example: ./onboard.ps1 -ResourceGroup rg-cloudlens -AppName app-cloudlens -Subscriptions '<sub-a>','<sub-b>'
+param(
+    [Parameter(Mandatory)][string]$ResourceGroup,   # resource group of the CloudLens web app
+    [Parameter(Mandatory)][string]$AppName,         # CloudLens web app name
+    [Parameter(Mandatory)][string[]]$Subscriptions  # subscription IDs to add (comma-separated)
 )
+$Subscriptions = @($Subscriptions | ForEach-Object { $_ -split '[,\s]+' } | Where-Object { $_ })
 # ======================================================
 
 $ErrorActionPreference = 'Stop'
