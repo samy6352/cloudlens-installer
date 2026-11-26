@@ -20,7 +20,7 @@ $Roles = 'Reader', 'Cost Management Reader', 'Cost Management Contributor'
 $BlobContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 $Api = '2025-03-01'
 
-function AzJson { $ErrorActionPreference = 'Continue'; $o = & az @args 2>$null; if ($LASTEXITCODE) { return $null }; $t = ($o | Out-String).Trim(); if ($t) { try { $t | ConvertFrom-Json } catch { $t } } }
+function AzJson { $ErrorActionPreference = 'Continue'; $script:AzErr = ''; $o = & az @args 2>&1; $err = @($o | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] }) -join ' '; $o = @($o | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }); if ($LASTEXITCODE) { $script:AzErr = $err; return $null }; $t = ($o | Out-String).Trim(); if ($t) { try { $t | ConvertFrom-Json } catch { $t } } }
 
 # ---- read the app's settings and identity
 $app = AzJson webapp show -g $ResourceGroup -n $AppName -o json
@@ -53,6 +53,9 @@ foreach ($sub in $Subscriptions) {
         }
 
         $folder = "$prefix/$sub"; $name = ExportName $folder
+        foreach ($rp in 'Microsoft.CostManagement', 'Microsoft.CostManagementExports') {
+            & az provider register -n $rp --subscription $sub --wait -o none 2>$null
+        }
         $uri = "/subscriptions/$sub/providers/Microsoft.CostManagement/exports/$name`?api-version=$Api"
         $body = [ordered]@{
             identity = @{ type = 'SystemAssigned' }; location = $location
@@ -75,7 +78,7 @@ foreach ($sub in $Subscriptions) {
             ($body | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath $file -Encoding utf8
             $made = AzJson rest --method put --uri $uri --body "@$file" --headers 'Content-Type=application/json' -o json
         } finally { Remove-Item $file -Force -ErrorAction SilentlyContinue }
-        if (-not $made) { throw 'export create failed (needs Cost Management Contributor on the subscription)' }
+        if (-not $made) { throw "export create failed: $script:AzErr" }
         Write-Host "   export $name ready"
 
         $exportId = [string]$made.identity.principalId
