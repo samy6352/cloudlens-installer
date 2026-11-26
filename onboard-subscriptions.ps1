@@ -14,7 +14,7 @@ param(
     [Parameter(Mandatory)][string]$AppName,         # CloudLens web app name
     [Parameter(Mandatory)][string[]]$Subscriptions  # subscription IDs to add (comma-separated)
 )
-$Subscriptions = @($Subscriptions | ForEach-Object { $_ -split '[,\s]+' } | Where-Object { $_ })
+$Subscriptions = @($Subscriptions | ForEach-Object { $_ -split "[,\s'`"]+" } | Where-Object { $_ })
 # ======================================================
 
 $ErrorActionPreference = 'Stop'
