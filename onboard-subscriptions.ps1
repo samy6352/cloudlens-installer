@@ -12,7 +12,8 @@
 param(
     [Parameter(Mandatory)][string]$ResourceGroup,   # resource group of the CloudLens web app
     [Parameter(Mandatory)][string]$AppName,         # CloudLens web app name
-    [Parameter(Mandatory)][string[]]$Subscriptions  # subscription IDs to add (comma-separated)
+    [Parameter(Mandatory)][string[]]$Subscriptions, # subscription IDs to add (comma-separated)
+    [switch]$SkipRoleGrants                         # roles already granted to the app identity; only create exports
 )
 $Subscriptions = @($Subscriptions | ForEach-Object { $_ -split "[,\s'`"]+" } | Where-Object { $_ })
 # ======================================================
@@ -48,7 +49,7 @@ foreach ($sub in $Subscriptions) {
     $sub = $sub.Trim().ToLowerInvariant(); $status = 'ready'
     Write-Host "`n== $sub" -ForegroundColor Cyan
     try {
-        foreach ($role in $Roles) {
+        foreach ($role in $(if ($SkipRoleGrants) { @() } else { $Roles })) {
             & az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal --role $role --scope "/subscriptions/$sub" -o none 2>$null
             if ($LASTEXITCODE) { throw "cannot grant '$role' (need Owner or User Access Administrator here)" }
             Write-Host "   granted $role"
