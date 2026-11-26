@@ -13,7 +13,8 @@ param(
     [Parameter(Mandatory)][string]$ResourceGroup,   # resource group of the CloudLens web app
     [Parameter(Mandatory)][string]$AppName,         # CloudLens web app name
     [Parameter(Mandatory)][string[]]$Subscriptions, # subscription IDs to add (comma-separated)
-    [switch]$SkipRoleGrants                         # roles already granted to the app identity; only create exports
+    [switch]$SkipRoleGrants,                        # roles already granted to the app identity; only create exports
+    [switch]$AppCreatesExports                      # verify/grant the app identity's access and let the app create the exports itself
 )
 $Subscriptions = @($Subscriptions | ForEach-Object { $_ -split "[,\s'`"]+" } | Where-Object { $_ })
 # ======================================================
@@ -45,6 +46,20 @@ function ExportName($folder) {
 
 $from = (Get-Date).ToUniversalTime().AddDays(1).Date.AddHours(2)
 $report = @()
+
+if ($AppCreatesExports) {
+    # The app's own managed identity creates and runs the exports; nothing here uses this user's rights for that.
+    if ($settings['CLOUDLENS_MANAGED_EXPORTS'] -ne 'true') {
+        & az webapp config appsettings set -g $ResourceGroup -n $AppName --settings CLOUDLENS_MANAGED_EXPORTS=true -o none
+        if ($LASTEXITCODE) { throw 'Could not enable CLOUDLENS_MANAGED_EXPORTS on the web app.' }
+        Write-Host 'Enabled CLOUDLENS_MANAGED_EXPORTS (the app restarts).' -ForegroundColor Yellow
+    }
+    $onStorage = AzJson role assignment list --assignee $principal --scope $account --query "[].roleDefinitionName" -o json
+    if (-not $onStorage -or @($onStorage).Count -eq 0) {
+        Write-Warning "The app identity holds no role on the export storage account. It needs the restricted role-assignment right there (see the deployment's storage module); the app will report it under Setup."
+    }
+}
+
 foreach ($sub in $Subscriptions) {
     $sub = $sub.Trim().ToLowerInvariant(); $status = 'ready'
     Write-Host "`n== $sub" -ForegroundColor Cyan
@@ -53,6 +68,15 @@ foreach ($sub in $Subscriptions) {
             & az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal --role $role --scope "/subscriptions/$sub" -o none 2>$null
             if ($LASTEXITCODE) { throw "cannot grant '$role' (need Owner or User Access Administrator here)" }
             Write-Host "   granted $role"
+        }
+
+        if ($AppCreatesExports) {
+            $have = @(AzJson role assignment list --assignee $principal --scope "/subscriptions/$sub" --include-inherited --query "[].roleDefinitionName" -o json)
+            $missing = @($Roles | Where-Object { $have -notcontains $_ })
+            if ($missing.Count) { throw "app identity is missing: $($missing -join ', ') (rerun without -SkipRoleGrants as an Owner or User Access Administrator)" }
+            Write-Host '   app identity holds Reader, Cost Management Reader and Cost Management Contributor'
+            $report += [pscustomobject]@{ Subscription = $sub; Status = 'ready - the app creates the exports' }
+            continue
         }
 
         $folder = "$prefix/$sub"; $name = ExportName $folder
